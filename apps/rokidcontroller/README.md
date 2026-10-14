@@ -7,17 +7,17 @@ Glasses app directly from your Bangle.js 2.
 
 | Bangle input | Sent as | Rokid touchpad equivalent |
 |---|---|---|
-| Tap (release < 600ms) | `KEYCODE_ENTER` | Tap (select/confirm) |
-| Touch and hold (600ms) | HID consumer `AC Home` → `KEYCODE_HOME` | Home |
+| Tap (quick touch) | `KEYCODE_ENTER` | Tap (select/confirm) |
+| Touch and hold | HID consumer `AC Home` → `KEYCODE_HOME` | Home |
 | BTN1 click | HID consumer `AC Back` → `KEYCODE_BACK` | Back |
 | Vertical drag | `KEYCODE_DPAD_DOWN` / `KEYCODE_DPAD_UP` | Swipe forward/backward |
 | Horizontal drag | `KEYCODE_DPAD_RIGHT` / `KEYCODE_DPAD_LEFT` | Swipe forward/backward |
 
 The swipe direction is decided by the dominant axis of the actual drag, so all four
 directions work at all times (horizontal swipes send `Left`/`Right`, vertical swipes
-send `Down`/`Up`). A hold is cancelled when the finger moves more than a few pixels,
-so a slow swipe never fires Home; Select only fires on release, so a hold never
-also selects.
+send `Down`/`Up`). Tap vs hold uses the firmware's own touch classification
+(`e.type`: 0 = quick, 2 = long press), and drags don't emit touch events, so the
+gestures never collide.
 
 ## Pairing
 
