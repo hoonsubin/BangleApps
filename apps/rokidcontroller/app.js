@@ -42,15 +42,10 @@ function centered(text, y) {
 
 var lastError = "";
 
-var touchStart = null;
-var touchTimer = null;
-var touchHeld = false;
 var dragStart = null;
 var dragPos = null;
 
-var HOLD_TOUCH_MS = 600;
 var SWIPE_THRESHOLD = 30;
-var HOLD_MOVE_PX = 20;
 
 function safeCall(fn, label) {
   try {
@@ -331,37 +326,24 @@ function sendConsumer(bit, action) {
   drawAction(action);
 }
 
-// Raw touchscreen events (b: 1 pressed, 0 released) separate tap from hold:
-// a touch held past the threshold fires Home immediately, and only a touch
-// released before the threshold sends Select. Cancel the hold if the finger
-// moves (that becomes a swipe instead).
-E.on("touch", function (x, y, b) {
+// The firmware classifies touches itself: e.type 0 = quick touch, 2 = long
+// press. Tap selects; a long touch fires Home. Swipes arrive as drag events
+// and don't emit touch, so the two never collide.
+Bangle.on("touch", function (zone, e) {
   if (screen !== "main") return;
+  if (!e || typeof e.type !== "number") return;
 
-  if (b) {
-    touchStart = Date.now();
-    touchHeld = false;
-    touchTimer = setTimeout(function () {
-      touchHeld = true;
-      sendConsumer(CONSUMER.HOME, "HOME");
-    }, HOLD_TOUCH_MS);
-    return;
+  if (e.type === 2) {
+    sendConsumer(CONSUMER.HOME, "HOME");
+  } else {
+    tapKey(KEY.ENTER, "SELECT");
   }
-
-  if (touchTimer) {
-    clearTimeout(touchTimer);
-    touchTimer = null;
-  }
-
-  if (touchHeld || touchStart === null) return;
-  tapKey(KEY.ENTER, "SELECT");
 });
 
 // Swipe recognition uses the real swipe axis: the dominant component of the
 // gesture decides whether it maps to Left/Right or Up/Down, so all four
 // directions work with no mode setting. The release event can carry no usable
-// x/y, so the last in-drag position is tracked and used instead. Movement
-// also cancels a pending hold, so a slow swipe never fires Home.
+// x/y, so the last in-drag position is tracked and used instead.
 Bangle.on("drag", function (e) {
   if (screen !== "main") return;
 
@@ -371,12 +353,6 @@ Bangle.on("drag", function (e) {
       dragPos = { x: e.x, y: e.y };
     } else if (typeof e.x === "number" && typeof e.y === "number") {
       dragPos = { x: e.x, y: e.y };
-      if (touchTimer && !touchHeld &&
-          (Math.abs(dragPos.x - dragStart.x) > HOLD_MOVE_PX ||
-           Math.abs(dragPos.y - dragStart.y) > HOLD_MOVE_PX)) {
-        clearTimeout(touchTimer);
-        touchTimer = null;
-      }
     }
     return;
   }
@@ -402,7 +378,7 @@ var btnWatch = setWatch(function () {
   sendConsumer(CONSUMER.BACK, "BACK");
 }, BTN1, {
   repeat: true,
-  edge: "fall",
+  edge: "falling",
   debounce: 30
 });
 
@@ -425,7 +401,6 @@ var statusTimer = setInterval(function () {
 E.on("kill", function () {
   clearWatch(btnWatch);
   clearInterval(statusTimer);
-  if (touchTimer) clearTimeout(touchTimer);
 });
 
 log("Rokid Controller started; SIM_MODE=" + SIM_MODE);
