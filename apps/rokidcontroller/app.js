@@ -5,10 +5,10 @@
  *
  * Controls
  * - Tap: Select / Enter
- * - Double tap: Back (HID consumer "AC Back"; a keyboard report cannot send KEYCODE_BACK)
+ * - Touch and hold (~600ms): Home (HID consumer "AC Home")
  * - Swipe: all four directions, decided by the actual swipe axis
  *   (horizontal -> Left/Right, vertical -> Up/Down)
- * - Hold BTN1: Confirm / Enter and send UART command "2TAP"
+ * - Click BTN1: Back (HID consumer "AC Back"; a keyboard report cannot send KEYCODE_BACK)
  */
 
 var CX = 88;
@@ -42,6 +42,16 @@ function centered(text, y) {
 
 var lastError = "";
 
+var touchStart = null;
+var touchTimer = null;
+var touchHeld = false;
+var dragStart = null;
+var dragPos = null;
+
+var HOLD_TOUCH_MS = 600;
+var SWIPE_THRESHOLD = 30;
+var HOLD_MOVE_PX = 20;
+
 function safeCall(fn, label) {
   try {
     fn();
@@ -67,7 +77,6 @@ function log(msg) {
 }
 
 var HAS_HID = typeof NRF !== "undefined" && typeof NRF.sendHIDReport === "function";
-var HAS_UART = typeof Bluetooth !== "undefined" && typeof Bluetooth.println === "function";
 var HAS_SEC = typeof NRF !== "undefined" && typeof NRF.getSecurityStatus === "function";
 var SIM_MODE = !HAS_HID;
 
@@ -121,7 +130,6 @@ var HID_REPORT = new Uint8Array([
 
 var KEY = {
   ENTER: 0x28,
-  ESC: 0x29,
   DOWN: 0x51,
   UP: 0x52,
   LEFT: 0x50,
@@ -167,15 +175,6 @@ var state = {
   status: "",
   blink: true
 };
-
-var lastTapTime = 0;
-var dragStart = null;
-var dragPos = null;
-var btnDownTime = 0;
-
-var DOUBLE_TAP_MS = 350;
-var SWIPE_THRESHOLD = 30;
-var HOLD_MS = 400;
 
 var R = {
   title: { y1: 18, y2: 42 },
@@ -258,8 +257,8 @@ function drawMainFrame() {
     drawError();
   } else {
     setC(THEME.mid);
-    centered("TAP SELECT  ·  x2 BACK", R.footer.y1);
-    centered("HOLD BTN CONFIRM", R.footer.y1 + 10);
+    centered("TAP SELECT  ·  HOLD HOME", R.footer.y1);
+    centered("BTN1 BACK", R.footer.y1 + 10);
   }
 
   g.flip();
@@ -332,28 +331,37 @@ function sendConsumer(bit, action) {
   drawAction(action);
 }
 
-function sendUartCmd(command) {
-  if (!HAS_UART) return;
-  safeCall(function () {
-    Bluetooth.println(command);
-  }, "Bluetooth.println");
-}
+// Raw touchscreen events (b: 1 pressed, 0 released) separate tap from hold:
+// a touch held past the threshold fires Home immediately, and only a touch
+// released before the threshold sends Select. Cancel the hold if the finger
+// moves (that becomes a swipe instead).
+E.on("touch", function (x, y, b) {
+  if (screen !== "main") return;
 
-Bangle.on("touch", function (zone, e) {
-  var now = Date.now();
-  if (now - lastTapTime < DOUBLE_TAP_MS) {
-    sendConsumer(CONSUMER.BACK, "BACK");
-    lastTapTime = 0;
-  } else {
-    tapKey(KEY.ENTER, "SELECT");
-    lastTapTime = now;
+  if (b) {
+    touchStart = Date.now();
+    touchHeld = false;
+    touchTimer = setTimeout(function () {
+      touchHeld = true;
+      sendConsumer(CONSUMER.HOME, "HOME");
+    }, HOLD_TOUCH_MS);
+    return;
   }
+
+  if (touchTimer) {
+    clearTimeout(touchTimer);
+    touchTimer = null;
+  }
+
+  if (touchHeld || touchStart === null) return;
+  tapKey(KEY.ENTER, "SELECT");
 });
 
 // Swipe recognition uses the real swipe axis: the dominant component of the
 // gesture decides whether it maps to Left/Right or Up/Down, so all four
 // directions work with no mode setting. The release event can carry no usable
-// x/y, so the last in-drag position is tracked and used instead.
+// x/y, so the last in-drag position is tracked and used instead. Movement
+// also cancels a pending hold, so a slow swipe never fires Home.
 Bangle.on("drag", function (e) {
   if (screen !== "main") return;
 
@@ -363,6 +371,12 @@ Bangle.on("drag", function (e) {
       dragPos = { x: e.x, y: e.y };
     } else if (typeof e.x === "number" && typeof e.y === "number") {
       dragPos = { x: e.x, y: e.y };
+      if (touchTimer && !touchHeld &&
+          (Math.abs(dragPos.x - dragStart.x) > HOLD_MOVE_PX ||
+           Math.abs(dragPos.y - dragStart.y) > HOLD_MOVE_PX)) {
+        clearTimeout(touchTimer);
+        touchTimer = null;
+      }
     }
     return;
   }
@@ -383,19 +397,12 @@ Bangle.on("drag", function (e) {
   }
 });
 
-var btnWatch = setWatch(function (e) {
-  if (e.state) {
-    btnDownTime = Date.now();
-    return;
-  }
-
-  if (Date.now() - btnDownTime >= HOLD_MS) {
-    tapKey(KEY.ENTER, "CONFIRM");
-    sendUartCmd("2TAP");
-  }
+// BTN1 is a plain click = Back.
+var btnWatch = setWatch(function () {
+  sendConsumer(CONSUMER.BACK, "BACK");
 }, BTN1, {
   repeat: true,
-  edge: "both",
+  edge: "fall",
   debounce: 30
 });
 
@@ -418,6 +425,7 @@ var statusTimer = setInterval(function () {
 E.on("kill", function () {
   clearWatch(btnWatch);
   clearInterval(statusTimer);
+  if (touchTimer) clearTimeout(touchTimer);
 });
 
 log("Rokid Controller started; SIM_MODE=" + SIM_MODE);
